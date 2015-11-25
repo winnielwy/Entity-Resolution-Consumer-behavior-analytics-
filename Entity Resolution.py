@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Created on Mon Nov  2 11:46:07 2015
+Created on Mon Nov 23 10:53:10 2015
 
 @author: wenyingliu
 """
@@ -9,6 +9,10 @@ import numpy as np
 import matplotlib.pyplot as plt 
 import pandas as pd
 from pandas import DataFrame, Series
+#import profile
+import line_profiler 
+import memory_profiler
+import gc
 
 import fileinput
 import string
@@ -16,6 +20,7 @@ import nltk
 
 
 #data cleaning
+
 def remove_punctuation(s):
     s = ''.join([i for i in s if i not in frozenset(string.punctuation)])
     return s
@@ -42,7 +47,9 @@ def cleancom(col):
     col5=col4.fillna("")
     col6=col5.apply(remove_punctuation)
     col7=col6.apply(rm_suffix)
-    return col7
+    col8=col7.apply(lambda x:x.replace('no data',''))
+    col9=col8.str.strip()
+    return col9
     
 def cleanemail(col):
     col1=col.astype('string')
@@ -50,7 +57,9 @@ def cleanemail(col):
     col3=col2.str.lower()
     col4=col3.str.strip()
     col5=col4.fillna("")
-    return col5
+    col6=col5.apply(lambda x:x.replace('no data',''))
+    col7=col6.str.strip()
+    return col7
     
 def emailtail(col):
     col1=col.astype('string')
@@ -59,7 +68,20 @@ def emailtail(col):
     col4=col3.str.strip()
     col5=col4.fillna("")
     col6=col5.apply(lambda x:x.split('@', 1)[-1])
-    return col6
+    col7=col6.apply(lambda x:x.replace('no data',''))
+    col8=col7.str.strip()
+    return col8
+    
+def emailfront(col):
+    col1=col.astype('string')
+    col2=col1.fillna("")
+    col3=col2.str.lower()
+    col4=col3.str.strip()
+    col5=col4.fillna("")
+    col6=col5.apply(lambda x:x.split('@', 1)[0])
+    col7=col6.apply(lambda x:x.replace('no data',''))
+    col8=col7.str.strip()
+    return col8
 
 ##Test if it is generic tail
 gen_tail=pd.read_csv("generic email tails set.csv")    
@@ -84,97 +106,38 @@ def unitest(col):
     col7=col6.apply(alert)
     return col7
     
-#entity resolution
-import sys  
-reload(sys)  
-sys.setdefaultencoding('utf8')
+##fuzzy matching
+from fuzzywuzzy import fuzz
+from fuzzywuzzy import process
 
-from nltk.tokenize import RegexpTokenizer
-from nltk.stem.porter import PorterStemmer
-from gensim import corpora, models, similarities      
-
-def make_unicode(input):
-    if type(input) != unicode:
-        input =  input.decode('latin-1')
-        return input
-    else:
-        return input
-
-def entity(target):
+def fuzzymatching(target,threshold):
         cell = []     
         for t in target:
             if t not in cell:
-                 cell.append(t)
+                cell.append(t)
+                
+        com=sorted(cell)
         
-        counts=target.value_counts()  
+        comcom=[]
+        similarity=[]    
+        for i in range(len(com)):
+            second=[]
+            third=[]
+            if i+10<=len(com):
+                for j in range(i,i+10):
+                    t=fuzz.ratio(com[i],com[j])
+                    if t>threshold:
+                        second.append(com[j])
+                        third.append(t)             
+            else:
+                for j in range(i,len(com)):
+                    t=fuzz.ratio(com[i],com[j])
+                    if t>threshold:
+                        second.append(com[j])
+                        third.append(t)
+            comcom.append(second)
+            similarity.append(third)
         
-        unicode_pp=[]
-        for i in cell:
-            unicode_pp.append(make_unicode(i))
-            
-
-        tokenizer = RegexpTokenizer(r'\w+')
-        tokenized = [tokenizer.tokenize(p) for p in unicode_pp]
-        porter_stemmer = PorterStemmer()
-        cleaned = [[porter_stemmer.stem(word) for word in p] for p in tokenized]
-
-        dictionary = corpora.Dictionary(cleaned)
-        corpus = [dictionary.doc2bow(text) for text in cleaned]
-
-        tfidf = models.TfidfModel(corpus)
-        c_tfidf = tfidf[corpus]
-        
-        lsi = models.LsiModel(c_tfidf, id2word=dictionary, num_topics=len(cell))
-        corpus_lsi = lsi[c_tfidf]
-        index = similarities.MatrixSimilarity(tfidf[corpus])
-        
-        #test
-        sort=[]
-        for test_data in unicode_pp:
-            input=make_unicode(test_data.decode('latin-1'))
-            query = dictionary.doc2bow([porter_stemmer.stem(w) for w in [t for t in tokenizer.tokenize(input.lower())]])
-            query_lsi = tfidf[query]
-            sims = index[query_lsi]
-            sort_sims = sorted(enumerate(sims), key=lambda item: -item[1])
-            sort.append(sort_sims)
-        #accuracy and similarity for each cell    
-        accu=[]
-        sim_num=[]
-        for cell in sort:
-            n0=[]
-            n1=[]
-            
-            for i in cell:
-                t0=i[0]
-                t1=i[1]
-                if t1>threshold:
-                    n0.append(t0)
-                    n1.append(t1)
-            sim_num.append(n0)
-            accu.append(n1)
-         #similarity number for each cell   
-        com_num=[]
-        for i in range(0,len(accu)):
-             num=len(accu[i])
-             com_num.append(num)
-        
-        sim_name=[]
-        for i in sim_num:
-            company=[]        
-            for j in i:
-                clean_name=unicode_pp[j].encode('ascii', 'ignore')
-                company.append(clean_name)
-            sim_name.append(company)
-
-        clean_company=[]
-        for name in unicode_pp:
-            clean_company.append(name.encode('ascii', 'ignore'))
-
-        mydict={'company':clean_company,'sim_company':sim_name,'accuracy':accu,'cell':sim_num,'number':com_num}
-        myDF=pd.DataFrame(mydict)
-        
-        com=myDF['company'].tolist()
-        sim_com=myDF['sim_company'].tolist()
     
         t=[]
         newrow=[]
@@ -186,16 +149,17 @@ def entity(target):
                 for col,sim_company in enumerate(lst):
                     if com[i]==sim_company:
                         found_flag=True
-                        newrow =list(set(t[row]+ sim_com[i]))
+                        newrow =list(set(t[row]+ comcom[i]))
                         t[row] = newrow
             if found_flag==False:
-                t.append(sim_com[i])
+                t.append(comcom[i])
         total=filter(None, t) 
      
         size=[]
         for i in total:
              size.append(len(i))
-             
+        
+        counts=target.value_counts()     
         mail_count=counts.to_dict()
         mail_count={k: v for k, v in mail_count.items() if k}
 
@@ -226,84 +190,290 @@ def entity(target):
 
         md={'original_com':comcom,'clean_com':pop_com}
         myDF=pd.DataFrame(md) 
-        return myDF
+        return myDF       
+
 
 #data import
-df=pd.read_csv("Test.csv")
-df.dtypes
-df.info
-mydf=df.filter(items=['Bear Unique ID','Company_Name (Organization Name)','Email'])
-mydf=mydf.rename(columns={'Bear Unique ID':'id','Company_Name (Organization Name)':'Company','Email':'email'})
+####################
+#data import
+df=pd.read_csv("Sample Data.csv")
+#df.dtypes
+#df.info
+mydf=df.filter(items=['01_Bear_ID','04_First_Name','05_Last_Name','06_Email','07_Company_Name'])
+mydf=mydf.rename(columns={'01_Bear_ID':'id','04_First_Name':'first_name','05_Last_Name':'last_name','06_Email':'email','07_Company_Name':'Company'})
 
-#data cleaning 
+#data cleaning
+mydf['First']=cleanemail(mydf['first_name'])
+mydf['Last']=cleanemail(mydf['last_name']) 
+#mydf['full_name']=mydf.First.map(str) + "_" + mydf.Last
 mydf['clean_com']=cleancom(mydf['Company'])
 mydf['clean_email']=cleanemail(mydf['email'])
+mydf['email_front']=emailfront(mydf['email'])
 mydf['email_tail']=emailtail(mydf['email'])
 mydf['test']=unitest(mydf['email'])
 
+
 #data subset
+####delete NA
+def exists(it):
+    return (it is not None)
+   
 tail_unique=mydf[mydf.test == 'unique']
 tail_generic=mydf[mydf.test == 'generic']
-email=tail_unique['email_tail']
+emailtail=tail_unique['email_tail']
+emailtail=emailtail[emailtail.str.len() != 0]
+emailtail=emailtail.dropna()
+
+emailfront=mydf['email_front']
+emailfront=emailfront[emailfront.str.len() != 0]
+emailfront=emailfront.dropna()
 
 company=mydf['clean_com']
+company=company[company.str.len() != 0]
+company=company.dropna()
 
-#entity resolution output
-threshold=0.8
-myDF3=entity(company)
+firstname=mydf['First']
+firstname=firstname[firstname.str.len() != 0]
+firstname=firstname.dropna()
 
-threshold=0.7
-myDF4=entity(email)
-myDF4=myDF4.rename(columns = {'clean_com':'sim_email','original_com':'email_tail'})
+lastname=mydf['Last']
+lastname=lastname[lastname.str.len() != 0]
+lastname=lastname.dropna()
 
-#merge file
-#same email-same company
+
+#######output
+myDF_com=fuzzymatching(company,86)
+myDF_com=myDF_com.dropna()
+myDF_com=myDF_com[myDF_com['original_com'].map(len) >0]
+##counts test
+counts_com=company.value_counts()
+len(counts_com)
+counts_coms=myDF_com.original_com.value_counts()
+len(counts_coms)
+
+
+myDF_tail=fuzzymatching(emailtail,86)
+myDF_tail=myDF_tail.rename(columns = {'clean_com':'sim_tail','original_com':'email_tail'})
+myDF_tail=myDF_tail.dropna()
+myDF_tail=myDF_tail[myDF_tail['email_tail'].map(len) >0]
+##counts test
+counts_tail=emailtail.value_counts()
+len(counts_tail)
+
+####merge file
+#company
+#similar company
+df_com=myDF_com.drop_duplicates(['original_com'])   
+dup_com=myDF_com[myDF_com.duplicated()]
+df_com=df_com.rename(columns = {'original_com':'clean_com','clean_com':'sim_com'})
+result1=pd.merge(mydf,df_com,how='left',on='clean_com')
+result1.sim_com.fillna(result1.clean_com, inplace=True)
+
+#email- company
+df_mail=myDF_tail.drop_duplicates(['email_tail'])   #4689
+dup_mail=myDF_tail[myDF_tail.duplicated()]
+result2=pd.merge(result1,df_mail,how='left',on='email_tail')
+
 ddaa0=tail_unique.filter(items=['clean_com','email_tail'])
 ddaa0=ddaa0[ddaa0['email_tail'].map(len) >0]
 ddaa0=ddaa0[ddaa0['clean_com'].map(len) >0]
 ddaa0=ddaa0.dropna()
-
-bb = ddaa0.groupby(['email_tail','clean_com']).count()
-b=bb.add_suffix('_Count').reset_index()
 c=DataFrame({'count' : ddaa0.groupby(['email_tail','clean_com']).size()}).reset_index()
-
 idx = c.groupby('email_tail')['count'].idxmax()
 yy=c.loc[idx, ['email_tail', 'clean_com']]
-yy=yy.rename(columns = {'clean_com':'sim_com'})
-result1=pd.merge(mydf,yy,how='left',on='email_tail')
-result1.sim_com.fillna(result1.clean_com, inplace=True)
-
-#similar email
-df4=myDF4.drop_duplicates(['email_tail'])   #4689
-dup4=myDF4[myDF4.duplicated()]
-result2=pd.merge(result1,df4,how='left',on='email_tail')
-ddaa2=result2.filter(items=['sim_email','sim_com'])
-ddaa2=ddaa2.drop_duplicates(['sim_email'])
-ddaa2=ddaa2.rename(columns = {'sim_com':'sim_com2'})
-ddaa2=ddaa2.dropna()
-ddaa2=ddaa2[ddaa2['sim_com2'].map(len) >0]
-result3=pd.merge(result2,ddaa2,how='left',on='sim_email')
+yy=yy.rename(columns = {'email_tail':'sim_tail','clean_com':'sim_com2'})
+result3=pd.merge(result2,yy,how='left',on='sim_tail')
 result3.sim_com2.fillna(result3.sim_com, inplace=True)
 
-#similar company
-df3=myDF3.drop_duplicates(['original_com'])   
-dup=myDF3[myDF3.duplicated()]
-df3=df3.rename(columns = {'original_com':'clean_com','clean_com':'sim_com3'})
-result4=pd.merge(result3,df3,how='left',on='clean_com')
-result4.sim_com3.fillna(result4.sim_com2, inplace=True)
+#same email-same company
+ddaa1=result3.filter(items=['sim_com2','email_tail','test'])
+ddaa1=ddaa1[ddaa1.test == 'unique']
 
-result4['Final_Com']=result4['sim_com3'].apply(lambda x:x.title())
+ddaa1=ddaa1[ddaa1['email_tail'].map(len) >0]
+ddaa1=ddaa1[ddaa1['sim_com2'].map(len) >0]
+ddaa1=ddaa1.dropna()
 
-result4.to_csv('Test_out.csv')
+c1=DataFrame({'count' : ddaa1.groupby(['email_tail','sim_com2']).size()}).reset_index()
 
-ddaa4=result4.filter(items=['Final_Com'])
+idx1 = c1.groupby('email_tail')['count'].idxmax()
+yy1=c1.loc[idx, ['email_tail', 'sim_com2']]
+yy1=yy1.rename(columns = {'sim_com2':'sim_com3'})
+result4=pd.merge(result3,yy1,how='left',on='email_tail')
+result4.sim_com3.fillna(result3.sim_com2, inplace=True)
+
+###clean_com-sim_com3
+ddaa2=result4.filter(items=['clean_com','sim_com3'])
+ddaa2=ddaa2[ddaa2['clean_com'].map(len) >0]
+ddaa2=ddaa2[ddaa2['sim_com3'].map(len) >0]
+ddaa2=ddaa2.dropna()
+
+df = ddaa2.groupby(['clean_com','sim_com3'])['sim_com3'].agg({'no':'count'})
+mask = df.groupby(level=0).agg('idxmax')
+df_count = df.loc[mask['no']]
+df_count = df_count.reset_index()
+df_count=df_count.rename(columns = {'sim_com3':'sim_com4'})
+
+result5=pd.merge(result4,df_count,how='left',on='clean_com')
+result5.sim_com4.fillna(result4.sim_com3, inplace=True)
+del result5['no']
+result5['Final_Com']=result5['sim_com4'].apply(lambda x:x.title())
+#result5.to_csv('Test3.csv')
+
+ddaa4=result5.filter(items=['Final_Com'])
 ddaa4=ddaa4.drop_duplicates(['Final_Com'])
 len(ddaa4)
-#final unique com:5789
-#unique com:7360
 
 
+#######individual
+def similarity(com):
+        '''
+        com = []     
+        for t in target:
+            if t not in com:
+                com.append(t) 
+                
+        #com=sorted(cell)
+        '''
+        simrate=[]   
+        for i in range(len(com)):
+            if i+1<len(com):
+                t=fuzz.ratio(com[i],com[i+1])
+                simrate.append(t) 
+            else:
+                t=0
+                simrate.append(t)        
+        my={'sim_com4':com,'simrate':simrate}
+        sim_rate=pd.DataFrame(my) 
+        return sim_rate
+        
+result5=result5.sort_index(by=['sim_com4', 'Last'], ascending=[True, True])
+result5 = result5.reset_index(drop=True)
+#simcom
+simcom=result5['sim_com4']
+simcom=simcom.tolist()
+myDF_simcom=similarity(simcom)
+myDF_simcom=myDF_simcom.rename(columns = {'simrate':'simrate_com'})
+
+#simail
+result5['sim_mail']=result5.email_front.map(str) + " " + result5.email_tail
+simail=result5['sim_mail']
+simail=simail.tolist()
+
+myDF_simail=similarity(simail)
+myDF_simail=myDF_simail.rename(columns = {'sim_com4':'sim_mail','simrate':'simrate_mail'})
+#myDF_simail=myDF_simail.dropna()
+#myDF_simail=myDF_simail[myDF_simail['sim_mail'].map(len) >0]
+
+#simemail_front
+emailfront=result5['email_front']
+emailfront=emailfront.tolist()
+myDF_front=similarity(emailfront)
+myDF_front=myDF_front.rename(columns = {'sim_com4':'email_front','simrate':'simrate_front'})
+myDF_front=myDF_front.dropna()
+myDF_front=myDF_front[myDF_front['email_front'].map(len) >0]
+
+#simfirst
+firstname=result5['First']
+firstname=firstname.tolist()
+myDF_first=similarity(firstname)
+myDF_first=myDF_first.rename(columns = {'sim_com4':'First','simrate':'simrate_first'})
+myDF_first=myDF_first.dropna()
+myDF_first=myDF_first[myDF_first['First'].map(len) >0]
+
+#simlast
+lastname=result5['Last']
+lastname=lastname.tolist()
+myDF_last=similarity(lastname)
+myDF_last=myDF_last.rename(columns = {'sim_com4':'Last','simrate':'simrate_Last'})
+myDF_last=myDF_last.dropna()
+myDF_last=myDF_last[myDF_last['Last'].map(len) >0]
+
+##mergefile
+result=pd.concat([myDF_simcom,myDF_simail,myDF_front,myDF_first,myDF_last],axis=1,ignore_index=False)
+result=result.filter(items=['simrate_com','simrate_mail','simrate_front','simrate_first','simrate_Last'])
+final=pd.concat([result5,result],axis=1,ignore_index=False)
+final.columns=list(result5.columns.values)+list(result.columns.values)
+
+final['id']=final['id'].astype('str')
+final['sim_individual']=final.id.shift(-1)
+final['sim_individual']=final['sim_individual'].astype('str')
+final['iidd']=final.id+' '+final.sim_individual
+
+#final['sim_individual']='BA-' + final['sim_individual']
+
+#final.to_csv('winnie.csv')
+
+
+####
+#individual fuzzy matching
+foo = final.ix[(final['simrate_com']>=95) 
+& (final['simrate_mail'] >= 94) 
+& (final['simrate_front'] >= 70) 
+& (final['simrate_first']>= 85) 
+& (final['simrate_Last'] >= 90)]
+        
+#foo.to_csv('innie.csv')
+#foo['s_id']=foo.index
+
+id=foo.id.tolist()
+iidd=foo.iidd.tolist()
+
+ID=[]
+for t in iidd:
+    ID.append(t.split())
+    
+ 
+t=[]
+newrow=[]
+lst=[]
+col=0
+for i in range(len(id)):
+    found_flag=False
+    for row,lst in enumerate(t):
+        for col,sim_company in enumerate(lst):
+            if id[i]==sim_company:
+                found_flag=True
+                newrow =list(set(t[row]+ ID[i]))
+                t[row] = newrow
+    if found_flag==False:
+        t.append(ID[i])
+total=filter(None, t)
+
+size=[]
+for i in total:
+     size.append(len(i))
+
+my={'sim-id':total,'num':size}
+my=pd.DataFrame(my) 
+
+pop_com=[]
+for cell in range(len(total)):
+    n=[total[cell][0]]
+    x=size[cell]
+    y=n*x
+    for comcell in y:
+        pop_com.append(comcell)
+
+comcom=[]
+for cell_i in total:
+     for cell_j in cell_i:
+         comcom.append(cell_j)
+ 
+md={'original_id':comcom,'sim_id':pop_com}
+myDF=pd.DataFrame(md) 
+     
+df=myDF.drop_duplicates(['original_id'])  
+dup=myDF[myDF.duplicated()]
+df=df.rename(columns = {'original_id':'id'})
+final_ID=pd.merge(final,df,how='left',on='id')
+dup_id=final_ID[final_ID.duplicated('id')] 
+final_ID.sim_id.fillna(final_ID.id, inplace=True)
+final_ID['sim_id']='BA-' + final_ID['sim_id']      
+   
+final_ID.to_csv('winnie.csv')    
 
         
-         
-         
+
+        
+        
+        
